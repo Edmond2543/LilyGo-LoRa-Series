@@ -1,23 +1,47 @@
 /*
    RadioLib Receive with Interrupts Example
-
-   This example listens for LoRa transmissions and tries to
-   receive them. Once a packet is received, an interrupt is
-   triggered. To successfully receive data, the following
-   settings have to be the same on both transmitter
-   and receiver:
-    - carrier frequency
-    - bandwidth
-    - spreading factor
-    - coding rate
-    - sync word
-
-   For full API reference, see the GitHub Pages
-   https://jgromes.github.io/RadioLib/
+   Modifié pour : SX1262 (T-Beam Supreme), 915 MHz, WiFi WPA2-Enterprise, API LLM 
+   et INTERFACE OLED AVANCÉE.
 */
 
 #include <RadioLib.h>
 #include "LoRaBoards.h"
+#include <WiFi.h>
+#include <HTTPClient.h>
+
+// =============================================
+// CONFIGURATION WIFI
+// =============================================
+#define USE_WPA2_ENTERPRISE  true
+
+// --- WPA2 Personnel ---
+const char* WIFI_SSID     = "climoilou";
+const char* WIFI_PASSWORD = "MonMotDePasse";
+
+// --- WPA2 Entreprise (EAP-PEAP) ---
+const char* EAP_IDENTITY  = "2440312";
+const char* EAP_USERNAME  = "2440312";
+const char* EAP_PASSWORD  = "Teladmin2026!";
+
+// =============================================
+// CONFIGURATION LLM
+// =============================================
+const char* OPENWEBUI_URL = "https://chat.ve2fpd.com/api/chat/completions";
+const char* API_KEY       = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImUwOWZhNjRhLTdhMzctNDRhNi05NWU4LTAxMzY0MWFjNDhkNiIsImV4cCI6MTc3Njk5NDg5MSwianRpIjoiODJhNTE1MWQtOWM3ZC00N2E4LWJmZDEtYzNjNzA0MWU5YzlhIn0.ig3_rGHIos4znA2_M27_x0Jf1KgeAKJoWL4k6XjfmuA";
+const char* MODEL_NAME    = "assistant-iot-v2";
+
+// =============================================
+// VARIABLES GLOBALES D'INTERFACE (NOUVEAU)
+// =============================================
+static volatile bool receivedFlag = false;
+static String rssi = "--";
+static String snr = "--";
+static String payload = "--";
+
+static String wifiStatus = "WIFI: WAIT...";
+static String sysStatus  = "LORA: WAIT...";
+
+void drawMain(); // Déclaration préalable
 
 #if     defined(USING_SX1276)
 #ifndef CONFIG_RADIO_FREQ
@@ -43,9 +67,9 @@ SX1276 radio = new Module(RADIO_CS_PIN, RADIO_DIO0_PIN, RADIO_RST_PIN, RADIO_DIO
 #endif
 SX1278 radio = new Module(RADIO_CS_PIN, RADIO_DIO0_PIN, RADIO_RST_PIN, RADIO_DIO1_PIN);
 
-#elif   defined(USING_SX1262)
+#elif   defined(USING_SX1262) // --- T-BEAM SUPREME ---
 #ifndef CONFIG_RADIO_FREQ
-#define CONFIG_RADIO_FREQ           850.0
+#define CONFIG_RADIO_FREQ           915.0 
 #endif
 #ifndef CONFIG_RADIO_OUTPUT_POWER
 #define CONFIG_RADIO_OUTPUT_POWER   22
@@ -53,7 +77,6 @@ SX1278 radio = new Module(RADIO_CS_PIN, RADIO_DIO0_PIN, RADIO_RST_PIN, RADIO_DIO
 #ifndef CONFIG_RADIO_BW
 #define CONFIG_RADIO_BW             125.0
 #endif
-
 SX1262 radio = new Module(RADIO_CS_PIN, RADIO_DIO1_PIN, RADIO_RST_PIN, RADIO_BUSY_PIN);
 
 #elif   defined(USING_SX1280)
@@ -73,7 +96,7 @@ SX1280 radio = new Module(RADIO_CS_PIN, RADIO_DIO1_PIN, RADIO_RST_PIN, RADIO_BUS
 #define CONFIG_RADIO_FREQ           2400.0
 #endif
 #ifndef CONFIG_RADIO_OUTPUT_POWER
-#define CONFIG_RADIO_OUTPUT_POWER   3           // PA Version power range : -18 ~ 3dBm
+#define CONFIG_RADIO_OUTPUT_POWER   3           
 #endif
 #ifndef CONFIG_RADIO_BW
 #define CONFIG_RADIO_BW             203.125
@@ -93,37 +116,16 @@ SX1280 radio = new Module(RADIO_CS_PIN, RADIO_DIO1_PIN, RADIO_RST_PIN, RADIO_BUS
 SX1268 radio = new Module(RADIO_CS_PIN, RADIO_DIO1_PIN, RADIO_RST_PIN, RADIO_BUSY_PIN);
 
 #elif   defined(USING_LR1121)
-
-/*
-* Important: LR1121 PA Version
-*
-* The 2.4G version does not have a power amplifier (PA). The permissible power setting is 13dBm.
-*
-* If it is a version with a built-in PA, please do not exceed 0dBm in the maximum power setting.
-* This is because a power amplifier has been added to the RF front-end; setting it to 0dBm will achieve an output power of 22dBm.
-* Setting it to more than 1dBm may damage the PA.
-*
-* */
-
 #define CONFIG_RADIO_FREQ           2450.0
 #define CONFIG_RADIO_OUTPUT_POWER   LILYGO_RADIO_2G4_TX_POWER_LIMIT
 #define CONFIG_RADIO_BW             125.0
-
-// The maximum power of LR1121 Sub 1G band can only be set to 22 dBm
-// #define CONFIG_RADIO_FREQ           868.0
-// #define CONFIG_RADIO_OUTPUT_POWER   22
-// #define CONFIG_RADIO_BW             125.0
-
 LR1121 radio = new Module(RADIO_CS_PIN, RADIO_DIO9_PIN, RADIO_RST_PIN, RADIO_BUSY_PIN);
 
 #ifdef USING_LR1121PA
-// LR1121 Version PA RF switch table
 static const uint32_t pa_version_rf_switch_dio_pins[] = {
     RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6, RADIOLIB_LR11X0_DIO7, RADIOLIB_LR11X0_DIO8, RADIOLIB_NC
 };
-
 static const Module::RfSwitchMode_t high_freq_switch_table[] = {
-    // mode                  DIO5  DIO6 DIO7 DIO8
     { LR11x0::MODE_STBY,   { LOW,  LOW, LOW, LOW} },
     { LR11x0::MODE_TX,     { LOW,  LOW, LOW, HIGH} },
     { LR11x0::MODE_RX,     { LOW,  LOW, HIGH, LOW} },
@@ -133,9 +135,7 @@ static const Module::RfSwitchMode_t high_freq_switch_table[] = {
     { LR11x0::MODE_WIFI,   { LOW,  LOW, LOW, HIGH} },
     END_OF_MODE_TABLE,
 };
-
 static const Module::RfSwitchMode_t low_freq_switch_table[] = {
-    // mode                  DIO5  DIO6 DIO7 DIO8
     { LR11x0::MODE_STBY,   { LOW,  LOW, LOW, LOW} },
     { LR11x0::MODE_TX,     { LOW,  HIGH, LOW, LOW} },
     { LR11x0::MODE_RX,     { HIGH, LOW, LOW, LOW} },
@@ -145,176 +145,137 @@ static const Module::RfSwitchMode_t low_freq_switch_table[] = {
     { LR11x0::MODE_WIFI,   { LOW,  LOW, LOW, LOW} },
     END_OF_MODE_TABLE,
 };
+#endif 
+#endif 
 
-#endif /*USING_LR1121PA*/
-#endif /*Radio define end*/
-
-// flag to indicate that a packet was received
-static volatile bool receivedFlag = false;
-static String rssi = "0dBm";
-static String snr = "0dB";
-static String payload = "0";
-
-// this function is called when a complete packet
-// is received by the module
-// IMPORTANT: this function MUST be 'void' type
-//            and MUST NOT have any arguments!
+// Interruption LoRa
 void setFlag(void)
 {
-    // we got a packet, set the flag
     receivedFlag = true;
 }
+
+// =============================================
+// FONCTIONS WIFI ET LLM
+// =============================================
+void setupWiFi() {
+    Serial.println("\n--- Initialisation du WiFi ---");
+    wifiStatus = "WIFI: CONNEXION...";
+    drawMain(); // Mise à jour de l'écran
+
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_STA);
+
+    if (USE_WPA2_ENTERPRISE) {
+        WiFi.begin(WIFI_SSID, WPA2_AUTH_PEAP, EAP_IDENTITY, EAP_USERNAME, EAP_PASSWORD);
+    } else {
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+        wifiStatus = "IP: " + WiFi.localIP().toString();
+        Serial.println("\nWiFi Connecté ! " + wifiStatus);
+    } else {
+        wifiStatus = "WIFI: ERREUR";
+        Serial.println("\nÉchec de la connexion WiFi.");
+    }
+    drawMain(); // Mise à jour de l'écran avec le résultat
+}
+
+void sendDataToLLM(String loraData) {
+    if (WiFi.status() == WL_CONNECTED) {
+        
+        sysStatus = "API SENDING...";
+        drawMain(); // Indiquer qu'on parle à l'API
+        
+        Serial.println("\n--- Envoi des données au LLM ---");
+        HTTPClient http;
+        http.begin(OPENWEBUI_URL);
+        
+        http.addHeader("Content-Type", "application/json");
+        String authHeader = "Bearer ";
+        authHeader += API_KEY;
+        http.addHeader("Authorization", authHeader);
+
+        String jsonPayload = "{\"model\": \"" + String(MODEL_NAME) + "\", \"messages\": [{\"role\": \"user\", \"content\": \"Nouvelle valeur de potentiomètre lue via LoRa : " + loraData + "\"}]}";
+
+        int httpResponseCode = http.POST(jsonPayload);
+
+        if (httpResponseCode > 0) {
+            sysStatus = "API: HTTP " + String(httpResponseCode); // Ex: API: HTTP 200
+            Serial.printf("Réponse HTTP : %d\n", httpResponseCode);
+            String response = http.getString();
+            Serial.println(response);
+        } else {
+            sysStatus = "API: ERR TIMEOUT";
+            Serial.printf("Erreur d'envoi HTTP : %s\n", http.errorToString(httpResponseCode).c_str());
+        }
+        
+        http.end();
+    } else {
+        sysStatus = "API: NO WIFI";
+        Serial.println("Erreur: Impossible d'envoyer au LLM, WiFi déconnecté.");
+        setupWiFi(); // Tente une reconnexion
+    }
+    drawMain();
+}
+
 
 void setup()
 {
     setupBoards();
-
-    // When the power is turned on, a delay is required.
     delay(1500);
+    
+    // On dessine l'interface initiale
+    drawMain();
+    
+    // Initialiser le Wi-Fi (l'écran se mettra à jour dedans)
+    setupWiFi();
 
 #ifdef  RADIO_TCXO_ENABLE
     pinMode(RADIO_TCXO_ENABLE, OUTPUT);
     digitalWrite(RADIO_TCXO_ENABLE, HIGH);
 #endif
 
-    // initialize radio with default settings
     int state = radio.begin();
-
     printResult(state == RADIOLIB_ERR_NONE);
 
-    Serial.printf("[%s]:", RADIO_TYPE_STR);
-    Serial.print(F("Radio Initializing ... "));
-    if (state == RADIOLIB_ERR_NONE) {
-        Serial.println(F("success!"));
-    } else {
-        Serial.print(F("failed, code "));
-        Serial.println(state);
+    if (state != RADIOLIB_ERR_NONE) {
+        sysStatus = "LORA: INIT ERR " + String(state);
+        drawMain();
         while (true);
     }
 
-    // set the function that will be called
-    // when new packet is received
     radio.setPacketReceivedAction(setFlag);
-
-    /*
-    *   Sets carrier frequency.
-    *   SX1278/SX1276 : Allowed values range from 137.0 MHz to 525.0 MHz.
-    *   SX1268/SX1262 : Allowed values are in range from 150.0 to 960.0 MHz.
-    *   SX1280        : Allowed values are in range from 2400.0 to 2500.0 MHz.
-    *   LR1121        : Allowed values are in range from 150.0 to 960.0 MHz, 1900 - 2200 MHz and 2400 - 2500 MHz. Will also perform calibrations.
-    * * * */
-
-    if (radio.setFrequency(CONFIG_RADIO_FREQ) == RADIOLIB_ERR_INVALID_FREQUENCY) {
-        Serial.println(F("Selected frequency is invalid for this module!"));
-        while (true);
-    }
-
-    /*
-    *   Sets LoRa link bandwidth.
-    *   SX1278/SX1276 : Allowed values are 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125, 250 and 500 kHz. Only available in %LoRa mode.
-    *   SX1268/SX1262 : Allowed values are 7.8, 10.4, 15.6, 20.8, 31.25, 41.7, 62.5, 125.0, 250.0 and 500.0 kHz.
-    *   SX1280        : Allowed values are 203.125, 406.25, 812.5 and 1625.0 kHz.
-    *   LR1121        : Allowed values are 62.5, 125.0, 250.0 and 500.0 kHz.
-    * * * */
-    if (radio.setBandwidth(CONFIG_RADIO_BW) == RADIOLIB_ERR_INVALID_BANDWIDTH) {
-        Serial.println(F("Selected bandwidth is invalid for this module!"));
-        while (true);
-    }
-
-
-    /*
-    * Sets LoRa link spreading factor.
-    * SX1278/SX1276 :  Allowed values range from 6 to 12. Only available in LoRa mode.
-    * SX1262        :  Allowed values range from 5 to 12.
-    * SX1280        :  Allowed values range from 5 to 12.
-    * LR1121        :  Allowed values range from 5 to 12.
-    * * * */
-    if (radio.setSpreadingFactor(12) == RADIOLIB_ERR_INVALID_SPREADING_FACTOR) {
-        Serial.println(F("Selected spreading factor is invalid for this module!"));
-        while (true);
-    }
-
-    /*
-    * Sets LoRa coding rate denominator.
-    * SX1278/SX1276/SX1268/SX1262 : Allowed values range from 5 to 8. Only available in LoRa mode.
-    * SX1280        :  Allowed values range from 5 to 8.
-    * LR1121        :  Allowed values range from 5 to 8.
-    * * * */
-    if (radio.setCodingRate(6) == RADIOLIB_ERR_INVALID_CODING_RATE) {
-        Serial.println(F("Selected coding rate is invalid for this module!"));
-        while (true);
-    }
-
-    /*
-    * Sets LoRa sync word.
-    * SX1278/SX1276/SX1268/SX1262/SX1280 : Sets LoRa sync word. Only available in LoRa mode.
-    * * */
-    if (radio.setSyncWord(0xAB) != RADIOLIB_ERR_NONE) {
-        Serial.println(F("Unable to set sync word!"));
-        while (true);
-    }
-
-    /*
-    * Sets transmission output power.
-    * SX1278/SX1276 :  Allowed values range from -3 to 15 dBm (RFO pin) or +2 to +17 dBm (PA_BOOST pin). High power +20 dBm operation is also supported, on the PA_BOOST pin. Defaults to PA_BOOST.
-    * SX1262        :  Allowed values are in range from -9 to 22 dBm. This method is virtual to allow override from the SX1261 class.
-    * SX1268        :  Allowed values are in range from -9 to 22 dBm.
-    * SX1280        :  Allowed values are in range from -18 to 13 dBm. PA Version range : -18 ~ 3dBm
-    * LR1121        :  Allowed values are in range from -17 to 22 dBm (high-power PA) or -18 to 13 dBm (High-frequency PA), PA Version range : -9 ~ 0dBm
-    * * * */
-    if (radio.setOutputPower(CONFIG_RADIO_OUTPUT_POWER) == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {
-        Serial.println(F("Selected output power is invalid for this module!"));
-        while (true);
-    }
+    radio.setFrequency(CONFIG_RADIO_FREQ);
+    radio.setBandwidth(CONFIG_RADIO_BW);
+    radio.setSpreadingFactor(12);
+    radio.setCodingRate(6);
+    radio.setSyncWord(0xAB);
+    radio.setOutputPower(CONFIG_RADIO_OUTPUT_POWER);
 
 #if !defined(USING_SX1280) && !defined(USING_LR1121) && !defined(USING_SX1280PA)
-    /*
-    * Sets current limit for over current protection at transmitter amplifier.
-    * SX1278/SX1276 : Allowed values range from 45 to 120 mA in 5 mA steps and 120 to 240 mA in 10 mA steps.
-    * SX1262/SX1268 : Allowed values range from 45 to 120 mA in 2.5 mA steps and 120 to 240 mA in 10 mA steps.
-    * NOTE: set value to 0 to disable overcurrent protection
-    * * * */
-    if (radio.setCurrentLimit(140) == RADIOLIB_ERR_INVALID_CURRENT_LIMIT) {
-        Serial.println(F("Selected current limit is invalid for this module!"));
-        while (true);
-    }
+    radio.setCurrentLimit(140);
 #endif
-
-    /*
-    * Sets preamble length for LoRa or FSK modem.
-    * SX1278/SX1276 : Allowed values range from 6 to 65535 in %LoRa mode or 0 to 65535 in FSK mode.
-    * SX1262/SX1268 : Allowed values range from 1 to 65535.
-    * SX1280        : Allowed values range from 1 to 65535. preamble length is multiple of 4
-    * LR1121        : Allowed values range from 1 to 65535.
-    * * */
-    if (radio.setPreambleLength(16) == RADIOLIB_ERR_INVALID_PREAMBLE_LENGTH) {
-        Serial.println(F("Selected preamble length is invalid for this module!"));
-        while (true);
-    }
-
-    // Enables or disables CRC check of received packets.
-    if (radio.setCRC(false) == RADIOLIB_ERR_INVALID_CRC_CONFIGURATION) {
-        Serial.println(F("Selected CRC is invalid for this module!"));
-        while (true);
-    }
+    radio.setPreambleLength(16);
+    radio.setCRC(false);
 
 #if  defined(USING_LR1121)
 #if defined(USING_LR1121PA)
     if (CONFIG_RADIO_FREQ < 2400) {
-        Serial.printf("LR1121 PA Version Using low frequency switch table for PA version\n");
         radio.setRfSwitchTable(pa_version_rf_switch_dio_pins, low_freq_switch_table);
     } else {
-        Serial.printf("LR1121 PA Version Using high frequency switch table for PA version\n");
         radio.setRfSwitchTable(pa_version_rf_switch_dio_pins, high_freq_switch_table);
     }
-#else   //  Version without PA rf switch table
-    Serial.println("LR1121 without PA Version");
-    static const uint32_t rfswitch_dio_pins[] = {
-        RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6,
-        RADIOLIB_NC, RADIOLIB_NC, RADIOLIB_NC
-    };
+#else  
+    static const uint32_t rfswitch_dio_pins[] = { RADIOLIB_LR11X0_DIO5, RADIOLIB_LR11X0_DIO6, RADIOLIB_NC, RADIOLIB_NC, RADIOLIB_NC };
     static const Module::RfSwitchMode_t rfswitch_table[] = {
-        // mode                  DIO5  DIO6
         { LR11x0::MODE_STBY,   { LOW,  LOW  } },
         { LR11x0::MODE_RX,     { HIGH, LOW  } },
         { LR11x0::MODE_TX,     { LOW,  HIGH } },
@@ -325,38 +286,22 @@ void setup()
         END_OF_MODE_TABLE,
     };
     radio.setRfSwitchTable(rfswitch_dio_pins, rfswitch_table);
-#endif /*USING_LR1121PA*/
-
-    // LR1121 TCXO Voltage 2.85~3.15V
+#endif 
     radio.setTCXO(3.0);
-
-#endif /*USING_LR1121*/
+#endif 
 
 #ifdef USING_DIO2_AS_RF_SWITCH
 #ifdef USING_SX1262
-    // Some SX126x modules use DIO2 as RF switch. To enable
-    // this feature, the following method can be used.
-    // NOTE: As long as DIO2 is configured to control RF switch,
-    //       it can't be used as interrupt pin!
-    if (radio.setDio2AsRfSwitch() != RADIOLIB_ERR_NONE) {
-        Serial.println(F("Failed to set DIO2 as RF switch!"));
-        while (true);
-    }
-#endif //USING_SX1262
-#endif //USING_DIO2_AS_RF_SWITCH
-
+    radio.setDio2AsRfSwitch();
+#endif 
+#endif 
 
 #ifdef RADIO_RX_PIN
-    // SX1280 PA Version
     radio.setRfSwitchPins(RADIO_RX_PIN, RADIO_TX_PIN);
 #endif
 
-
 #ifdef RADIO_SWITCH_PIN
-    // T-MOTION
-    const uint32_t pins[] = {
-        RADIO_SWITCH_PIN, RADIO_SWITCH_PIN, RADIOLIB_NC,
-    };
+    const uint32_t pins[] = { RADIO_SWITCH_PIN, RADIO_SWITCH_PIN, RADIOLIB_NC };
     static const Module::RfSwitchMode_t table[] = {
         {Module::MODE_IDLE,  {0,  0} },
         {Module::MODE_RX,    {1, 0} },
@@ -367,104 +312,84 @@ void setup()
 #endif
 
 #ifdef RADIO_CTRL
-    Serial.println("Turn on LAN, Enter Rx mode.");
-    /*
-    * 2W and BPF LoRa LAN Control ,set HIGH turn on LAN ,RX Mode
-    * */
     digitalWrite(RADIO_CTRL, HIGH);
-#endif /*RADIO_CTRL*/
+#endif 
 
     delay(1000);
 
-    // start listening for LoRa packets
-    Serial.print(F("Radio Starting to listen ... "));
     state = radio.startReceive();
     if (state == RADIOLIB_ERR_NONE) {
-        Serial.println(F("success!"));
+        sysStatus = "LORA: LISTENING...";
     } else {
-        Serial.print(F("failed, code "));
-        Serial.println(state);
+        sysStatus = "LORA: RX ERR " + String(state);
     }
-
     drawMain();
 }
 
 void loop()
 {
-    // check if the flag is set
     if (receivedFlag) {
-
-        // reset flag
         receivedFlag = false;
+        
+        sysStatus = "LORA: RX OK!";
+        drawMain(); // Met à jour l'écran pour montrer qu'on a capté un truc
 
-        // you can read received data as an Arduino String
         int state = radio.readData(payload);
-
-        // you can also read received data as byte array
-        /*
-          byte byteArr[8];
-          int state = radio.readData(byteArr, 8);
-        */
-
         flashLed();
 
         if (state == RADIOLIB_ERR_NONE) {
-
             rssi = String(radio.getRSSI()) + "dBm";
             snr = String(radio.getSNR()) + "dB";
 
-            drawMain();
+            drawMain(); // Affiche la valeur reçue
 
-            // packet was successfully received
-            Serial.println(F("Radio Received packet!"));
-
-            // print data of the packet
-            Serial.print(F("Radio Data:\t\t"));
-            Serial.println(payload);
-
-            // print RSSI (Received Signal Strength Indicator)
-            Serial.print(F("Radio RSSI:\t\t"));
-            Serial.println(rssi);
-
-            // print SNR (Signal-to-Noise Ratio)
-            Serial.print(F("Radio SNR:\t\t"));
-            Serial.println(snr);
+            Serial.println(F("\n[Radio] Paquet reçu !"));
+            
+            // --- APPEL API LLM ---
+            sendDataToLLM(payload);
 
         } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-            // packet was received, but is malformed
-            Serial.println(F("CRC error!"));
+            sysStatus = "LORA: CRC ERROR";
         } else {
-            // some other error occurred
-            Serial.print(F("failed, code "));
-            Serial.println(state);
+            sysStatus = "LORA: ERR " + String(state);
         }
 
-        // put module back to listen mode
+        // Remettre le module en écoute après traitement
         radio.startReceive();
-
+        if(sysStatus.indexOf("API") != -1) {
+            delay(1500); // Laisse le temps de lire le code HTTP sur l'écran
+            sysStatus = "LORA: LISTENING...";
+            drawMain();
+        }
     }
 }
 
+// --- NOUVELLE INTERFACE GRAPHIQUE ---
 void drawMain()
 {
     if (disp) {
         disp->clearBuffer();
-        disp->drawRFrame(0, 0, 128, 64, 5);
-        disp->setFont(u8g2_font_pxplusibmvga8_mr);
-        disp->setCursor(15, 20);
-        disp->print("RX:");
-        disp->setCursor(15, 35);
-        disp->print("SNR:");
-        disp->setCursor(15, 50);
-        disp->print("RSSI:");
+        disp->drawRFrame(0, 0, 128, 64, 3);
+        
+        // Utilisation d'une police petite mais lisible pour faire tenir 4 lignes
+        disp->setFont(u8g2_font_pxplusibmvga8_mr); 
+        
+        // Ligne 1 : Statut WiFi (ex: IP: 192.168.x.x)
+        disp->setCursor(5, 15);
+        disp->print(wifiStatus);
 
-        disp->setFont(u8g2_font_crox1h_tr);
-        disp->setCursor( U8G2_HOR_ALIGN_RIGHT(payload.c_str()) - 21, 20 );
-        disp->print(payload);
-        disp->setCursor( U8G2_HOR_ALIGN_RIGHT(snr.c_str()) - 21, 35 );
-        disp->print(snr);
-        disp->setCursor( U8G2_HOR_ALIGN_RIGHT(rssi.c_str()) - 21, 50 );
-        disp->print(rssi);
+        // Ligne 2 : Statut Système (ex: LORA: LISTENING... ou API SENDING...)
+        disp->setCursor(5, 30);
+        disp->print(sysStatus);
+
+        // Ligne 3 : Message Reçu (ex: MSG: Pot: 2048 #1)
+        disp->setCursor(5, 45);
+        disp->print("MSG: " + payload);
+
+        // Ligne 4 : Qualité du signal
+        disp->setCursor(5, 60);
+        disp->print("Sig: " + snr + " | " + rssi);
+        
         disp->sendBuffer();
     }
 }

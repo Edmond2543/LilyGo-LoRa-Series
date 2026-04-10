@@ -41,7 +41,7 @@
 // 5. --------------T-BEAM S3------------------------------
 // Product: https://lilygo.cc/products/t-beam-supreme
 
-// #define T_BEAM_S3_SUPREME_SX1262
+#define T_BEAM_S3_SUPREME_SX1262
 // #define T_BEAM_S3_SUPREME_LR1121
 
 // 6. --------------T3 S3 V1.0 or T3 S3 V1.3 -------------------
