@@ -19,15 +19,15 @@ const char* WIFI_SSID     = "climoilou";
 const char* WIFI_PASSWORD = "MonMotDePasse";
 
 // --- WPA2 Entreprise (EAP-PEAP) ---
-const char* EAP_IDENTITY  = "2440312";
-const char* EAP_USERNAME  = "2440312";
-const char* EAP_PASSWORD  = "Teladmin2026!";
+const char* EAP_IDENTITY  = "";
+const char* EAP_USERNAME  = "";
+const char* EAP_PASSWORD  = "";
 
 // =============================================
 // CONFIGURATION LLM
 // =============================================
-const char* OPENWEBUI_URL = "https://chat.ve2fpd.com/api/chat/completions";
-const char* API_KEY       = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6ImUwOWZhNjRhLTdhMzctNDRhNi05NWU4LTAxMzY0MWFjNDhkNiIsImV4cCI6MTc3Njk5NDg5MSwianRpIjoiODJhNTE1MWQtOWM3ZC00N2E4LWJmZDEtYzNjNzA0MWU5YzlhIn0.ig3_rGHIos4znA2_M27_x0Jf1KgeAKJoWL4k6XjfmuA";
+const char* OPENWEBUI_URL = "";
+const char* API_KEY       = ""
 const char* MODEL_NAME    = "assistant-iot-v2";
 
 // =============================================
